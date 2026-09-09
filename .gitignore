@@ -1,0 +1,22 @@
+# Dependencies and build output
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Local environment files and secrets
+**/.env*
+!**/.env.example
+
+# Logs and local files
+*.log
+.DS_Store
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.npmrc
+.vscode/
+.idea/
