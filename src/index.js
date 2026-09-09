@@ -7,7 +7,8 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { initSockets } from './sockets/index.js';
-import { seedDatabase } from './seeders/index.js';
+// Updated import path from './seeders/index.js' to './seeders/categories.seed.js'
+import { seedDatabase } from './seeders/categories.seed.js';
 
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
