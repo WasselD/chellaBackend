@@ -491,9 +491,8 @@ const QUESTIONS = [
   }
 ];
 
+// Pure function for programmatic seeding during app bootstrap
 export async function seedDatabase() {
-  await connectDB();
-
   console.log('[seed] clearing existing categories & questions…');
   await Category.deleteMany({});
   await Question.deleteMany({});
@@ -505,8 +504,10 @@ export async function seedDatabase() {
   console.log(`[seed] inserted ${QUESTIONS.length} questions`);
 }
 
-async function run() {
+// CLI runner for running directly via `node src/seeders/categories.seed.js` or `npm run seed`
+async function runCLI() {
   try {
+    await connectDB();
     await seedDatabase();
     await mongoose.disconnect();
     console.log('[seed] done.');
@@ -517,7 +518,8 @@ async function run() {
   }
 }
 
-// Fixed direct CLI execution check
-if (process.argv[1]?.endsWith('categories.seed.js')) {
-  run();
+const isDirectCLI = process.argv[1]?.replace(/\\/g, '/').endsWith('src/seeders/categories.seed.js');
+
+if (isDirectCLI) {
+  runCLI();
 }
