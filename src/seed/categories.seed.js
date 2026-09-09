@@ -1,17 +1,9 @@
-/**
- * Seeds the five Chella categories and a starter bank of bilingual
- * trivia questions so a freshly-cloned project has something to play
- * with immediately.
- *
- * Run with: npm run seed -w apps/server
- */
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import { connectDB } from '../config/db.js';
 import Category from '../models/Category.js';
 import Question from '../models/Question.js';
 
-// Load environment variables for standalone execution
 dotenv.config();
 
 const CATEGORIES = [
@@ -47,7 +39,6 @@ const CATEGORIES = [
   }
 ];
 
-// Each question: text/options in {en, ar}, correctIndex points into options.
 const QUESTIONS = [
   // ---- Cinema & TV ----------------------------------------------------
   {
@@ -526,7 +517,7 @@ async function run() {
   }
 }
 
-// Only auto-run if executed directly via node CLI
-if (process.argv[1]?.endsWith('categories.seed.js') || process.argv[1]?.endsWith('index.js')) {
+// Fixed direct CLI execution check
+if (process.argv[1]?.endsWith('categories.seed.js')) {
   run();
 }
