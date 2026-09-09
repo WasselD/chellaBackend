@@ -12,7 +12,8 @@ const REVEAL_TO_NEXT_QUESTION_DELAY_MS = 3000;
 
 function getUserId(user) {
   if (!user) return null;
-  return user.id ? user.id.toString() : user._id ? user._id.toString() : null;
+  const id = user.id || user._id;
+  return id ? id.toString() : null;
 }
 
 function toPublicRoom(room) {
@@ -67,7 +68,7 @@ async function loadQuestionsForRoom(dbRoom) {
 
   const sampled = await Question.aggregate([
     { $match: { category: dbRoom.category } },
-    { $sample: { size: dbRoom.questionCount } }
+    { $sample: { size: dbRoom.questionCount || 5 } }
   ]);
 
   return sampled.map((q) => ({
@@ -79,9 +80,10 @@ async function loadQuestionsForRoom(dbRoom) {
 }
 
 async function getOrLoadRoom(code) {
-  if (activeRooms.has(code)) return activeRooms.get(code);
+  const formattedCode = code.toUpperCase();
+  if (activeRooms.has(formattedCode)) return activeRooms.get(formattedCode);
 
-  const dbRoom = await Room.findOne({ code });
+  const dbRoom = await Room.findOne({ code: formattedCode });
   if (!dbRoom) return null;
 
   const room = {
@@ -110,21 +112,22 @@ async function getOrLoadRoom(code) {
     usedHints: new Map()
   };
 
-  activeRooms.set(code, room);
+  activeRooms.set(formattedCode, room);
   return room;
 }
 
 export async function joinRoom(io, socket, { code }) {
   if (!code) return socket.emit('room:error', { message: 'Room code is required' });
 
+  const formattedCode = code.toUpperCase();
   const userId = getUserId(socket.user);
   if (!userId) return socket.emit('room:error', { message: 'Unauthorized socket connection' });
 
-  const room = await getOrLoadRoom(code);
+  const room = await getOrLoadRoom(formattedCode);
   if (!room) return socket.emit('room:error', { message: 'Room not found' });
 
-  socket.join(code);
-  socket.data.roomCode = code;
+  socket.join(formattedCode);
+  socket.data.roomCode = formattedCode;
 
   const existing = room.players.get(userId);
   room.players.set(userId, {
@@ -137,7 +140,7 @@ export async function joinRoom(io, socket, { code }) {
 
   await syncPlayersToDB(room);
 
-  io.to(code).emit('room:state', { room: toPublicRoom(room), players: playersArray(room) });
+  io.to(formattedCode).emit('room:state', { room: toPublicRoom(room), players: playersArray(room) });
 
   if (room.status === 'playing' && room.currentQuestion) {
     socket.emit('question:new', {
@@ -155,14 +158,25 @@ export async function joinRoom(io, socket, { code }) {
 }
 
 export async function startRoom(io, socket, { code }) {
+  if (!code) return;
+  const formattedCode = code.toUpperCase();
   const userId = getUserId(socket.user);
-  const room = activeRooms.get(code);
-  if (!room) return socket.emit('room:error', { message: 'Room not found' });
+  const room = activeRooms.get(formattedCode);
+
+  if (!room) {
+    console.error(`[gameEngine] startRoom error: Room ${formattedCode} not found in memory`);
+    return socket.emit('room:error', { message: 'Room not found' });
+  }
+
   if (room.hostId !== userId) {
+    console.error(`[gameEngine] startRoom error: User ${userId} is not host (${room.hostId})`);
     return socket.emit('room:error', { message: 'Only the host can start the match' });
   }
+
   if (room.status !== 'lobby') return;
-  if (room.questions.length === 0) {
+
+  if (!room.questions || room.questions.length === 0) {
+    console.error(`[gameEngine] startRoom error: Room ${formattedCode} has no questions loaded`);
     return socket.emit('room:error', {
       message: 'No questions available for this category yet. Run the seed script first.'
     });
@@ -170,7 +184,7 @@ export async function startRoom(io, socket, { code }) {
 
   room.status = 'playing';
   await syncPlayersToDB(room);
-  nextQuestion(io, code);
+  nextQuestion(io, formattedCode);
 }
 
 function calculatePoints(timeTaken, duration) {
@@ -213,8 +227,9 @@ function nextQuestion(io, code) {
 }
 
 export function submitAnswer(io, socket, { code, questionId, optionIndex }) {
+  const formattedCode = code.toUpperCase();
   const userId = getUserId(socket.user);
-  const room = activeRooms.get(code);
+  const room = activeRooms.get(formattedCode);
   if (!room || room.status !== 'playing' || !room.currentQuestion) return;
   if (room.currentQuestion.id !== questionId) return;
   if (room.answers.has(userId)) return;
@@ -230,7 +245,7 @@ export function submitAnswer(io, socket, { code, questionId, optionIndex }) {
 
   const connectedCount = Array.from(room.players.values()).filter((p) => p.connected).length;
   if (room.answers.size >= connectedCount) {
-    revealAnswer(io, code);
+    revealAnswer(io, formattedCode);
   }
 }
 
@@ -254,8 +269,9 @@ function revealAnswer(io, code) {
 }
 
 export async function useHint(io, socket, { code, type }) {
+  const formattedCode = code.toUpperCase();
   const userId = getUserId(socket.user);
-  const room = activeRooms.get(code);
+  const room = activeRooms.get(formattedCode);
   if (!room || room.status !== 'playing' || !room.currentQuestion) return;
   if (!HINT_COSTS[type]) return socket.emit('room:error', { message: 'Unknown hint type' });
   if (room.answers.has(userId)) return;
@@ -264,7 +280,7 @@ export async function useHint(io, socket, { code, type }) {
   if (usedByPlayer.has(type)) return;
 
   try {
-    await spendCoins(userId, HINT_COSTS[type], `hint_${type}`, { roomCode: code, questionId: room.currentQuestion.id });
+    await spendCoins(userId, HINT_COSTS[type], `hint_${type}`, { roomCode: formattedCode, questionId: room.currentQuestion.id });
   } catch (err) {
     if (err instanceof InsufficientCoinsError) {
       return socket.emit('room:error', { message: 'Not enough coins' });
@@ -285,13 +301,13 @@ export async function useHint(io, socket, { code, type }) {
 
   if (type === 'freeze') {
     room.timeLeft += 10;
-    io.to(code).emit('hint:applied', { type, timeLeft: room.timeLeft });
+    io.to(formattedCode).emit('hint:applied', { type, timeLeft: room.timeLeft });
     return;
   }
 
   if (type === 'skip') {
     socket.emit('hint:applied', { type });
-    revealAnswer(io, code);
+    revealAnswer(io, formattedCode);
   }
 }
 
