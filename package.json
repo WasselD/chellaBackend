@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "seed": "node src/seeders/categories.seed.js"
-  },
+"scripts": {
+  "dev": "node --watch src/index.js",
+  "start": "node src/index.js",
+  "seed": "node src/seeds/category.seed.js"
+},
   "dependencies": {
     "express": "^4.21.1",
     "socket.io": "^4.7.5",
