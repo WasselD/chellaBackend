@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "seed": "node src/seed/categories.seed.js"
+    "seed": "node src/seeders/categories.seed.js"
   },
   "dependencies": {
     "express": "^4.21.1",
