@@ -6,11 +6,9 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 const CATEGORY_KEYS = ['cinema', 'geo', 'food', 'sport', 'proverbs'];
 
 export const createRoom = asyncHandler(async (req, res) => {
-  const { category, quizId, mode, questionCount, timePerQuestion, hostId } = req.body;
+  const { category, quizId, mode, questionCount, timePerQuestion } = req.body;
+  const hostId = req.user._id;
 
-  if (!hostId) {
-    return res.status(400).json({ message: 'hostId is required' });
-  }
   if (!quizId && !CATEGORY_KEYS.includes(category)) {
     return res.status(400).json({ message: 'A valid category or a quizId is required' });
   }
@@ -26,8 +24,13 @@ export const createRoom = asyncHandler(async (req, res) => {
   const room = await Room.create({
     code,
     hostId,
-    // A custom quiz always plays its full, curated question set rather
-    // than a random sample, so questionCount/category come from it.
+    players: [
+      {
+        userId: hostId,
+        username: req.user.username,
+        score: 0
+      }
+    ],
     category: quiz ? quiz.category : category,
     quizId: quiz?._id ?? null,
     quizTitle: quiz?.title ?? null,
@@ -42,8 +45,6 @@ export const createRoom = asyncHandler(async (req, res) => {
   res.status(201).json({ room });
 });
 
-// Used by the "join with a code" flow before the client opens a socket,
-// so a bad/expired code can show an inline error instead of an empty room.
 export const getRoomByCode = asyncHandler(async (req, res) => {
   const room = await Room.findOne({ code: req.params.code });
 
