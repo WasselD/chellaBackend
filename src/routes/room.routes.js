@@ -10,6 +10,10 @@ const router = Router();
 
 router.post('/', requireAuth, createRoom);
 
+
+router.get('/:code', getRoomByCode);
+
+
 router.get('/code/:code', getRoomByCode);
 
 export default router;
