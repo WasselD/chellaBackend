@@ -7,6 +7,7 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { initSockets } from './sockets/index.js';
+import { seedDatabase } from './seeders/index.js'; // Adjust path if your seed file is located elsewhere
 
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
@@ -15,7 +16,16 @@ import categoryRoutes from './routes/category.routes.js';
 import referralRoutes from './routes/referral.routes.js';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware.js';
 
+// 1. Connect to Database
 await connectDB();
+
+// 2. Automatically Seed Database on Boot
+try {
+  await seedDatabase();
+  console.log('[chella-api] Database seeding completed successfully.');
+} catch (error) {
+  console.error('[chella-api] Database seeding error:', error);
+}
 
 const app = express();
 
