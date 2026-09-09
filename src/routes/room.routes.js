@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { createRoom, getRoomByCode } from '../controllers/room.controller.js';
+import { getMyReferralStats } from '../controllers/referral.controller.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
-router.post('/', requireAuth, createRoom);
-router.get('/:code', getRoomByCode);
+router.get('/me', requireAuth, getMyReferralStats);
 
 export default router;

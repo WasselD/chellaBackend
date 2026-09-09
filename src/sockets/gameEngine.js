@@ -1,5 +1,7 @@
 import Room from '../models/Room.js';
 import Question from '../models/Question.js';
+import Quiz from '../models/Quiz.js';
+import MatchHistory from '../models/MatchHistory.js';
 import { spendCoins, addCoins, HINT_COSTS, InsufficientCoinsError } from '../services/coinService.js';
 
 /**
@@ -22,6 +24,7 @@ function toPublicRoom(room) {
     code: room.code,
     hostId: room.hostId,
     category: room.category,
+    quizTitle: room.quizTitle,
     mode: room.mode,
     status: room.status,
     questionCount: room.questionCount,
@@ -54,6 +57,23 @@ async function syncPlayersToDB(room) {
 }
 
 async function loadQuestionsForRoom(dbRoom) {
+  if (dbRoom.quizId) {
+    const quiz = await Quiz.findById(dbRoom.quizId);
+    if (!quiz) return [];
+
+    // Quiz questions are plain, single-language strings (whatever the
+    // creator typed). We wrap them into the same { en, ar } shape the
+    // built-in bilingual questions use so the rest of the engine and the
+    // client's QuestionCard don't need a separate code path — the same
+    // text is just shown regardless of the active locale.
+    return quiz.questions.map((q, i) => ({
+      id: `${quiz._id.toString()}-${i}`,
+      text: { en: q.text, ar: q.text },
+      options: q.options.map((o) => ({ en: o, ar: o })),
+      correctIndex: q.correctIndex
+    }));
+  }
+
   const sampled = await Question.aggregate([
     { $match: { category: dbRoom.category } },
     { $sample: { size: dbRoom.questionCount } }
@@ -77,6 +97,8 @@ async function getOrLoadRoom(code) {
     code: dbRoom.code,
     hostId: dbRoom.hostId.toString(),
     category: dbRoom.category,
+    quizId: dbRoom.quizId ? dbRoom.quizId.toString() : null,
+    quizTitle: dbRoom.quizTitle,
     mode: dbRoom.mode,
     questionCount: dbRoom.questionCount,
     timePerQuestion: dbRoom.timePerQuestion,
@@ -296,17 +318,37 @@ async function endGame(io, code) {
   if (room.timerInterval) clearInterval(room.timerInterval);
   if (room.nextQuestionTimeout) clearTimeout(room.nextQuestionTimeout);
 
-  const players = playersArray(room);
-  const topScore = Math.max(0, ...players.map((p) => p.score));
+  // Rank players by score (ties share a placement) so match history can
+  // show "1st", "2nd", etc. rather than just a raw score.
+  const ranked = [...playersArray(room)].sort((a, b) => b.score - a.score);
+  const placementByUserId = new Map();
+  ranked.forEach((p, i) => {
+    const placement = i > 0 && ranked[i - 1].score === p.score ? placementByUserId.get(ranked[i - 1].id) : i + 1;
+    placementByUserId.set(p.id, placement);
+  });
 
-  for (const player of players) {
+  const topScore = Math.max(0, ...ranked.map((p) => p.score));
+
+  for (const player of ranked) {
     const reward = player.score === topScore && topScore > 0 ? MATCH_REWARD_WINNER : MATCH_REWARD_PARTICIPANT;
     try {
       await addCoins(player.id, reward, 'match_reward', { roomCode: code });
       const socketInstance = [...io.sockets.sockets.values()].find((s) => s.id === room.players.get(player.id)?.socketId);
       socketInstance?.emit('coins:update', { delta: reward });
+
+      await MatchHistory.create({
+        userId: player.id,
+        roomCode: code,
+        category: room.quizId ? null : room.category,
+        quizId: room.quizId,
+        quizTitle: room.quizTitle,
+        score: player.score,
+        placement: placementByUserId.get(player.id),
+        totalPlayers: ranked.length,
+        coinsEarned: reward
+      });
     } catch (err) {
-      console.error(`[gameEngine] failed to award match reward to ${player.id}:`, err.message);
+      console.error(`[gameEngine] failed to finalize match for ${player.id}:`, err.message);
     }
   }
 

@@ -21,3 +21,13 @@ export const env = {
     referredWelcomeCoins: Number(process.env.REFERRED_WELCOME_COINS || 20)
   }
 };
+
+
+if (env.nodeEnv === 'production') {
+  if (env.jwtSecret === 'dev-only-secret-change-me' || env.jwtSecret.length < 32) {
+    throw new Error(
+      'JWT_SECRET must be set to a strong, random value (32+ chars) in production. ' +
+        'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+    );
+  }
+}

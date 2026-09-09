@@ -1,14 +1,24 @@
 import Room from '../models/Room.js';
+import Quiz from '../models/Quiz.js';
 import { generateUniqueRoomCode } from '../utils/generateRoomCode.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 const CATEGORY_KEYS = ['cinema', 'geo', 'food', 'sport', 'proverbs'];
 
 export const createRoom = asyncHandler(async (req, res) => {
-  const { category, mode, questionCount, timePerQuestion, hostId } = req.body;
+  const { category, quizId, mode, questionCount, timePerQuestion, hostId } = req.body;
 
-  if (!hostId || !CATEGORY_KEYS.includes(category)) {
-    return res.status(400).json({ message: 'hostId and a valid category are required' });
+  if (!hostId) {
+    return res.status(400).json({ message: 'hostId is required' });
+  }
+  if (!quizId && !CATEGORY_KEYS.includes(category)) {
+    return res.status(400).json({ message: 'A valid category or a quizId is required' });
+  }
+
+  let quiz = null;
+  if (quizId) {
+    quiz = await Quiz.findById(quizId);
+    if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
   }
 
   const code = await generateUniqueRoomCode();
@@ -16,12 +26,18 @@ export const createRoom = asyncHandler(async (req, res) => {
   const room = await Room.create({
     code,
     hostId,
-    category,
+    // A custom quiz always plays its full, curated question set rather
+    // than a random sample, so questionCount/category come from it.
+    category: quiz ? quiz.category : category,
+    quizId: quiz?._id ?? null,
+    quizTitle: quiz?.title ?? null,
     mode: mode === '1v1' ? '1v1' : 'group',
-    questionCount: Math.min(Math.max(Number(questionCount) || 10, 5), 25),
+    questionCount: quiz ? quiz.questions.length : Math.min(Math.max(Number(questionCount) || 10, 5), 25),
     timePerQuestion: Math.min(Math.max(Number(timePerQuestion) || 15, 5), 60),
     status: 'lobby'
   });
+
+  if (quiz) await Quiz.updateOne({ _id: quiz._id }, { $inc: { playCount: 1 } });
 
   res.status(201).json({ room });
 });

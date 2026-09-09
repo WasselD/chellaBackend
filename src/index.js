@@ -7,25 +7,16 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { initSockets } from './sockets/index.js';
-import { seedDatabase } from './seed/categories.seed.js';
 
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
 import roomRoutes from './routes/room.routes.js';
 import categoryRoutes from './routes/category.routes.js';
 import referralRoutes from './routes/referral.routes.js';
+import quizRoutes from './routes/quiz.routes.js';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware.js';
 
-// 1. Connect to Database
 await connectDB();
-
-// 2. Automatically Seed Database on Boot
-try {
-  await seedDatabase();
-  console.log('[chella-api] Database seeding completed successfully.');
-} catch (error) {
-  console.error('[chella-api] Database seeding error:', error);
-}
 
 const app = express();
 
@@ -41,6 +32,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/referrals', referralRoutes);
+app.use('/api/quizzes', quizRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
