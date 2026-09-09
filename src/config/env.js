@@ -8,7 +8,6 @@ function required(key, fallback) {
   return value;
 }
 
-// Helper to parse comma-separated CORS origins into an array
 function parseCorsOrigins(input) {
   const defaults = ['http://localhost:3000', 'https://chellaquiz.vercel.app'];
   if (!input) return defaults;
