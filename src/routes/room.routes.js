@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { 
   createRoom, 
-  getRooms, 
-  getRoomById 
+  getRooms 
 } from '../controllers/room.controller.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
@@ -12,8 +11,5 @@ router.get('/', getRooms);
 
 
 router.post('/', requireAuth, createRoom);
-
-
-router.get('/:id', getRoomById);
 
 export default router;
