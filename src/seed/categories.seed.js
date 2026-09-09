@@ -5,10 +5,14 @@
  *
  * Run with: npm run seed -w apps/server
  */
+import dotenv from 'dotenv';
+import mongoose from 'mongoose';
 import { connectDB } from '../config/db.js';
 import Category from '../models/Category.js';
 import Question from '../models/Question.js';
-import mongoose from 'mongoose';
+
+// Load environment variables for standalone execution
+dotenv.config();
 
 const CATEGORIES = [
   {
@@ -496,7 +500,7 @@ const QUESTIONS = [
   }
 ];
 
-async function run() {
+export async function seedDatabase() {
   await connectDB();
 
   console.log('[seed] clearing existing categories & questions…');
@@ -508,13 +512,21 @@ async function run() {
 
   await Question.insertMany(QUESTIONS);
   console.log(`[seed] inserted ${QUESTIONS.length} questions`);
-
-  await mongoose.disconnect();
-  console.log('[seed] done.');
-  process.exit(0);
 }
 
-run().catch((err) => {
-  console.error('[seed] failed:', err);
-  process.exit(1);
-});
+async function run() {
+  try {
+    await seedDatabase();
+    await mongoose.disconnect();
+    console.log('[seed] done.');
+    process.exit(0);
+  } catch (err) {
+    console.error('[seed] failed:', err);
+    process.exit(1);
+  }
+}
+
+// Only auto-run if executed directly via node CLI
+if (process.argv[1]?.endsWith('categories.seed.js') || process.argv[1]?.endsWith('index.js')) {
+  run();
+}
