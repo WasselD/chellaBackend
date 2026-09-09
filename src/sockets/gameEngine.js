@@ -108,6 +108,7 @@ async function getOrLoadRoom(code) {
     timeLeft: 0,
     timerInterval: null,
     nextQuestionTimeout: null,
+    isRevealing: false,
     answers: new Map(),
     usedHints: new Map()
   };
@@ -197,6 +198,9 @@ function nextQuestion(io, code) {
   if (!room) return;
 
   if (room.timerInterval) clearInterval(room.timerInterval);
+  if (room.nextQuestionTimeout) clearTimeout(room.nextQuestionTimeout);
+
+  room.isRevealing = false;
   room.currentIndex += 1;
 
   if (room.currentIndex >= room.questions.length) {
@@ -230,7 +234,8 @@ export function submitAnswer(io, socket, { code, questionId, optionIndex }) {
   const formattedCode = code.toUpperCase();
   const userId = getUserId(socket.user);
   const room = activeRooms.get(formattedCode);
-  if (!room || room.status !== 'playing' || !room.currentQuestion) return;
+
+  if (!room || room.status !== 'playing' || !room.currentQuestion || room.isRevealing) return;
   if (room.currentQuestion.id !== questionId) return;
   if (room.answers.has(userId)) return;
 
@@ -251,11 +256,18 @@ export function submitAnswer(io, socket, { code, questionId, optionIndex }) {
 
 function revealAnswer(io, code) {
   const room = activeRooms.get(code);
-  if (!room || !room.currentQuestion) return;
+  if (!room || !room.currentQuestion || room.isRevealing) return;
+
+  room.isRevealing = true;
 
   if (room.timerInterval) {
     clearInterval(room.timerInterval);
     room.timerInterval = null;
+  }
+
+  if (room.nextQuestionTimeout) {
+    clearTimeout(room.nextQuestionTimeout);
+    room.nextQuestionTimeout = null;
   }
 
   io.to(code).emit('answer:reveal', {
@@ -272,7 +284,8 @@ export async function useHint(io, socket, { code, type }) {
   const formattedCode = code.toUpperCase();
   const userId = getUserId(socket.user);
   const room = activeRooms.get(formattedCode);
-  if (!room || room.status !== 'playing' || !room.currentQuestion) return;
+
+  if (!room || room.status !== 'playing' || !room.currentQuestion || room.isRevealing) return;
   if (!HINT_COSTS[type]) return socket.emit('room:error', { message: 'Unknown hint type' });
   if (room.answers.has(userId)) return;
 

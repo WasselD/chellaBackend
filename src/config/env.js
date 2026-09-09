@@ -8,10 +8,19 @@ function required(key, fallback) {
   return value;
 }
 
+// Helper to parse comma-separated CORS origins into an array
+function parseCorsOrigins(input) {
+  const defaults = ['http://localhost:3000', 'https://chellaquiz.vercel.app'];
+  if (!input) return defaults;
+  
+  const customOrigins = input.split(',').map((o) => o.trim()).filter(Boolean);
+  return Array.from(new Set([...customOrigins, ...defaults]));
+}
+
 export const env = {
   port: Number(process.env.PORT || 5000),
   nodeEnv: process.env.NODE_ENV || 'development',
-  clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:3000',
+  clientOrigin: parseCorsOrigins(process.env.CLIENT_ORIGIN),
   mongoUri: required('MONGODB_URI', 'mongodb://localhost:27017/chella'),
   jwtSecret: required('JWT_SECRET', 'dev-only-secret-change-me'),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
@@ -21,7 +30,6 @@ export const env = {
     referredWelcomeCoins: Number(process.env.REFERRED_WELCOME_COINS || 20)
   }
 };
-
 
 if (env.nodeEnv === 'production') {
   if (env.jwtSecret === 'dev-only-secret-change-me' || env.jwtSecret.length < 32) {
