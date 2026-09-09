@@ -1,9 +1,19 @@
 import { Router } from 'express';
-import { getMyReferralStats } from '../controllers/referral.controller.js';
+import { 
+  createRoom, 
+  getRooms, 
+  getRoomById 
+} from '../controllers/room.controller.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
-router.get('/me', requireAuth, getMyReferralStats);
+router.get('/', getRooms);
+
+
+router.post('/', requireAuth, createRoom);
+
+
+router.get('/:id', getRoomById);
 
 export default router;
