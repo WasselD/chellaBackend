@@ -3,18 +3,22 @@ import Question from '../models/Question.js';
 import Quiz from '../models/Quiz.js';
 import MatchHistory from '../models/MatchHistory.js';
 import { spendCoins, addCoins, HINT_COSTS, InsufficientCoinsError } from '../services/coinService.js';
+import { isValidRoomCode } from '../utils/validators.js';
 
+/**
+ * Live, in-process room state. Keyed by 6-digit room code.
+ *
+ * NOTE: this is intentionally an in-memory store to keep the countdown
+ * timer trivial to reason about. It works great for a single server
+ * process. If you ever run more than one Node instance behind a load
+ * balancer, move this to Redis (with sticky sessions or a Redis
+ * adapter for Socket.io) so all instances share the same room state.
+ */
 const activeRooms = new Map();
 
 const MATCH_REWARD_WINNER = 30;
 const MATCH_REWARD_PARTICIPANT = 10;
 const REVEAL_TO_NEXT_QUESTION_DELAY_MS = 3000;
-
-function getUserId(user) {
-  if (!user) return null;
-  const id = user.id || user._id;
-  return id ? id.toString() : null;
-}
 
 function toPublicRoom(room) {
   return {
@@ -58,6 +62,11 @@ async function loadQuestionsForRoom(dbRoom) {
     const quiz = await Quiz.findById(dbRoom.quizId);
     if (!quiz) return [];
 
+    // Quiz questions are plain, single-language strings (whatever the
+    // creator typed). We wrap them into the same { en, ar } shape the
+    // built-in bilingual questions use so the rest of the engine and the
+    // client's QuestionCard don't need a separate code path — the same
+    // text is just shown regardless of the active locale.
     return quiz.questions.map((q, i) => ({
       id: `${quiz._id.toString()}-${i}`,
       text: { en: q.text, ar: q.text },
@@ -68,22 +77,21 @@ async function loadQuestionsForRoom(dbRoom) {
 
   const sampled = await Question.aggregate([
     { $match: { category: dbRoom.category } },
-    { $sample: { size: dbRoom.questionCount || 5 } }
+    { $sample: { size: dbRoom.questionCount } }
   ]);
 
   return sampled.map((q) => ({
     id: q._id.toString(),
-    text: q.text,
-    options: q.options,
+    text: q.text, // { en, ar }
+    options: q.options, // [{ en, ar }, ...]
     correctIndex: q.correctIndex
   }));
 }
 
 async function getOrLoadRoom(code) {
-  const formattedCode = code.toUpperCase();
-  if (activeRooms.has(formattedCode)) return activeRooms.get(formattedCode);
+  if (activeRooms.has(code)) return activeRooms.get(code);
 
-  const dbRoom = await Room.findOne({ code: formattedCode });
+  const dbRoom = await Room.findOne({ code });
   if (!dbRoom) return null;
 
   const room = {
@@ -97,9 +105,9 @@ async function getOrLoadRoom(code) {
     timePerQuestion: dbRoom.timePerQuestion,
     status: dbRoom.status,
     players: new Map(
-      (dbRoom.players || []).map((p) => [
+      dbRoom.players.map((p) => [
         p.userId.toString(),
-        { id: p.userId.toString(), username: p.username, score: p.score || 0, socketId: null, connected: false }
+        { id: p.userId.toString(), username: p.username, score: p.score, socketId: null, connected: false }
       ])
     ),
     questions: await loadQuestionsForRoom(dbRoom),
@@ -108,32 +116,27 @@ async function getOrLoadRoom(code) {
     timeLeft: 0,
     timerInterval: null,
     nextQuestionTimeout: null,
-    isRevealing: false,
     answers: new Map(),
     usedHints: new Map()
   };
 
-  activeRooms.set(formattedCode, room);
+  activeRooms.set(code, room);
   return room;
 }
 
-export async function joinRoom(io, socket, { code }) {
-  if (!code) return socket.emit('room:error', { message: 'Room code is required' });
+export async function joinRoom(io, socket, { code } = {}) {
+  if (!isValidRoomCode(code)) return socket.emit('room:error', { message: 'Room code is required' });
 
-  const formattedCode = code.toUpperCase();
-  const userId = getUserId(socket.user);
-  if (!userId) return socket.emit('room:error', { message: 'Unauthorized socket connection' });
-
-  const room = await getOrLoadRoom(formattedCode);
+  const room = await getOrLoadRoom(code);
   if (!room) return socket.emit('room:error', { message: 'Room not found' });
 
-  socket.join(formattedCode);
-  socket.data.roomCode = formattedCode;
+  socket.join(code);
+  socket.data.roomCode = code;
 
-  const existing = room.players.get(userId);
-  room.players.set(userId, {
-    id: userId,
-    username: socket.user.username || existing?.username || 'Player',
+  const existing = room.players.get(socket.user.id);
+  room.players.set(socket.user.id, {
+    id: socket.user.id,
+    username: socket.user.username,
     score: existing?.score ?? 0,
     socketId: socket.id,
     connected: true
@@ -141,8 +144,10 @@ export async function joinRoom(io, socket, { code }) {
 
   await syncPlayersToDB(room);
 
-  io.to(formattedCode).emit('room:state', { room: toPublicRoom(room), players: playersArray(room) });
+  io.to(code).emit('room:state', { room: toPublicRoom(room), players: playersArray(room) });
 
+  // A player joining mid-question (e.g. reconnect) should see the
+  // question currently in flight instead of a frozen lobby screen.
   if (room.status === 'playing' && room.currentQuestion) {
     socket.emit('question:new', {
       question: {
@@ -158,26 +163,15 @@ export async function joinRoom(io, socket, { code }) {
   }
 }
 
-export async function startRoom(io, socket, { code }) {
-  if (!code) return;
-  const formattedCode = code.toUpperCase();
-  const userId = getUserId(socket.user);
-  const room = activeRooms.get(formattedCode);
-
-  if (!room) {
-    console.error(`[gameEngine] startRoom error: Room ${formattedCode} not found in memory`);
-    return socket.emit('room:error', { message: 'Room not found' });
-  }
-
-  if (room.hostId !== userId) {
-    console.error(`[gameEngine] startRoom error: User ${userId} is not host (${room.hostId})`);
+export async function startRoom(io, socket, { code } = {}) {
+  if (!isValidRoomCode(code)) return;
+  const room = activeRooms.get(code);
+  if (!room) return socket.emit('room:error', { message: 'Room not found' });
+  if (room.hostId !== socket.user.id) {
     return socket.emit('room:error', { message: 'Only the host can start the match' });
   }
-
   if (room.status !== 'lobby') return;
-
-  if (!room.questions || room.questions.length === 0) {
-    console.error(`[gameEngine] startRoom error: Room ${formattedCode} has no questions loaded`);
+  if (room.questions.length === 0) {
     return socket.emit('room:error', {
       message: 'No questions available for this category yet. Run the seed script first.'
     });
@@ -185,11 +179,13 @@ export async function startRoom(io, socket, { code }) {
 
   room.status = 'playing';
   await syncPlayersToDB(room);
-  nextQuestion(io, formattedCode);
+  nextQuestion(io, code);
 }
 
 function calculatePoints(timeTaken, duration) {
   const ratio = Math.min(1, Math.max(0, timeTaken / duration));
+  // Full marks for a near-instant correct answer, decaying to a 40-point
+  // floor for a correct answer that lands right before time runs out.
   return Math.max(40, Math.round(100 - ratio * 60));
 }
 
@@ -198,9 +194,6 @@ function nextQuestion(io, code) {
   if (!room) return;
 
   if (room.timerInterval) clearInterval(room.timerInterval);
-  if (room.nextQuestionTimeout) clearTimeout(room.nextQuestionTimeout);
-
-  room.isRevealing = false;
   room.currentIndex += 1;
 
   if (room.currentIndex >= room.questions.length) {
@@ -230,44 +223,35 @@ function nextQuestion(io, code) {
   }, 1000);
 }
 
-export function submitAnswer(io, socket, { code, questionId, optionIndex }) {
-  const formattedCode = code.toUpperCase();
-  const userId = getUserId(socket.user);
-  const room = activeRooms.get(formattedCode);
-
-  if (!room || room.status !== 'playing' || !room.currentQuestion || room.isRevealing) return;
-  if (room.currentQuestion.id !== questionId) return;
-  if (room.answers.has(userId)) return;
+export function submitAnswer(io, socket, { code, questionId, optionIndex } = {}) {
+  if (!isValidRoomCode(code) || typeof optionIndex !== 'number') return;
+  const room = activeRooms.get(code);
+  if (!room || room.status !== 'playing' || !room.currentQuestion) return;
+  if (room.currentQuestion.id !== questionId) return; // stale/late client event
+  if (room.answers.has(socket.user.id)) return; // already answered
 
   const timeTaken = room.timePerQuestion - room.timeLeft;
   const isCorrect = optionIndex === room.currentQuestion.correctIndex;
   const points = isCorrect ? calculatePoints(timeTaken, room.timePerQuestion) : 0;
 
-  room.answers.set(userId, { optionIndex, timeTaken, points });
+  room.answers.set(socket.user.id, { optionIndex, timeTaken, points });
 
-  const player = room.players.get(userId);
+  const player = room.players.get(socket.user.id);
   if (player) player.score += points;
 
   const connectedCount = Array.from(room.players.values()).filter((p) => p.connected).length;
   if (room.answers.size >= connectedCount) {
-    revealAnswer(io, formattedCode);
+    revealAnswer(io, code);
   }
 }
 
 function revealAnswer(io, code) {
   const room = activeRooms.get(code);
-  if (!room || !room.currentQuestion || room.isRevealing) return;
-
-  room.isRevealing = true;
+  if (!room || !room.currentQuestion) return;
 
   if (room.timerInterval) {
     clearInterval(room.timerInterval);
     room.timerInterval = null;
-  }
-
-  if (room.nextQuestionTimeout) {
-    clearTimeout(room.nextQuestionTimeout);
-    room.nextQuestionTimeout = null;
   }
 
   io.to(code).emit('answer:reveal', {
@@ -280,20 +264,18 @@ function revealAnswer(io, code) {
   room.nextQuestionTimeout = setTimeout(() => nextQuestion(io, code), REVEAL_TO_NEXT_QUESTION_DELAY_MS);
 }
 
-export async function useHint(io, socket, { code, type }) {
-  const formattedCode = code.toUpperCase();
-  const userId = getUserId(socket.user);
-  const room = activeRooms.get(formattedCode);
-
-  if (!room || room.status !== 'playing' || !room.currentQuestion || room.isRevealing) return;
+export async function useHint(io, socket, { code, type } = {}) {
+  if (!isValidRoomCode(code)) return;
+  const room = activeRooms.get(code);
+  if (!room || room.status !== 'playing' || !room.currentQuestion) return;
   if (!HINT_COSTS[type]) return socket.emit('room:error', { message: 'Unknown hint type' });
-  if (room.answers.has(userId)) return;
+  if (room.answers.has(socket.user.id)) return; // can't buy a hint after answering
 
-  const usedByPlayer = room.usedHints.get(userId) ?? new Set();
-  if (usedByPlayer.has(type)) return;
+  const usedByPlayer = room.usedHints.get(socket.user.id) ?? new Set();
+  if (usedByPlayer.has(type)) return; // one use per hint per question
 
   try {
-    await spendCoins(userId, HINT_COSTS[type], `hint_${type}`, { roomCode: formattedCode, questionId: room.currentQuestion.id });
+    await spendCoins(socket.user.id, HINT_COSTS[type], `hint_${type}`, { roomCode: code, questionId: room.currentQuestion.id });
   } catch (err) {
     if (err instanceof InsufficientCoinsError) {
       return socket.emit('room:error', { message: 'Not enough coins' });
@@ -302,25 +284,33 @@ export async function useHint(io, socket, { code, type }) {
   }
 
   usedByPlayer.add(type);
-  room.usedHints.set(userId, usedByPlayer);
+  room.usedHints.set(socket.user.id, usedByPlayer);
   socket.emit('coins:update', { delta: -HINT_COSTS[type] });
 
   if (type === 'fiftyFifty') {
     const wrongIndices = [0, 1, 2, 3].filter((i) => i !== room.currentQuestion.correctIndex);
     const removed = wrongIndices.sort(() => Math.random() - 0.5).slice(0, 2);
+    // Personal to this player only — everyone else keeps all 4 options.
     socket.emit('hint:applied', { type, removedOptions: removed });
     return;
   }
 
   if (type === 'freeze') {
+    // Design choice: the countdown is a single shared/synced clock for
+    // the whole room, so a freeze extends it for everyone rather than
+    // creating a per-player timer. This keeps "live synchronized
+    // countdown" true while still giving the buyer a tactical edge.
     room.timeLeft += 10;
-    io.to(formattedCode).emit('hint:applied', { type, timeLeft: room.timeLeft });
+    io.to(code).emit('hint:applied', { type, timeLeft: room.timeLeft });
     return;
   }
 
   if (type === 'skip') {
+    // Design choice: skipping ends the question immediately for the
+    // whole room (no one else has to wait out the clock either), and
+    // costs the buyer nothing in points — it's not marked right or wrong.
     socket.emit('hint:applied', { type });
-    revealAnswer(io, formattedCode);
+    revealAnswer(io, code);
   }
 }
 
@@ -332,6 +322,8 @@ async function endGame(io, code) {
   if (room.timerInterval) clearInterval(room.timerInterval);
   if (room.nextQuestionTimeout) clearTimeout(room.nextQuestionTimeout);
 
+  // Rank players by score (ties share a placement) so match history can
+  // show "1st", "2nd", etc. rather than just a raw score.
   const ranked = [...playersArray(room)].sort((a, b) => b.score - a.score);
   const placementByUserId = new Map();
   ranked.forEach((p, i) => {
@@ -367,21 +359,31 @@ async function endGame(io, code) {
   await syncPlayersToDB(room);
   io.to(code).emit('game:end', { players: playersArray(room) });
 
+  // Free the room from memory a while after it ends, in case anyone's
+  // client re-fetches the final state. Swap this for a Redis TTL in a
+  // multi-instance deployment.
   setTimeout(() => activeRooms.delete(code), 10 * 60 * 1000);
 }
 
 export async function handleDisconnect(io, socket) {
   const code = socket.data.roomCode;
-  const userId = getUserId(socket.user);
-  if (!code || !userId) return;
+  if (!code) return;
 
   const room = activeRooms.get(code);
   if (!room) return;
 
-  const player = room.players.get(userId);
-  if (!player || player.socketId !== socket.id) return;
+  const player = room.players.get(socket.user?.id);
+  if (!player || player.socketId !== socket.id) return; // reconnected on a new socket already
 
-  player.connected = false;
+  if (room.status === 'lobby') {
+    room.players.delete(socket.user.id);
+    if (room.hostId === socket.user.id) {
+      const nextHost = room.players.values().next().value;
+      if (nextHost) room.hostId = nextHost.id;
+    }
+  } else {
+    player.connected = false;
+  }
 
   await syncPlayersToDB(room);
   io.to(code).emit('room:state', { room: toPublicRoom(room), players: playersArray(room) });

@@ -26,6 +26,9 @@ const roomSchema = new Schema(
     quizId: { type: Schema.Types.ObjectId, ref: 'Quiz', default: null },
     quizTitle: { type: String, default: null },
     mode: { type: String, enum: ['1v1', 'group'], default: 'group' },
+    // Private: joinable only by whoever has the 6-digit code/link.
+    // Public: also listed on the public browse page for anyone to join.
+    visibility: { type: String, enum: ['public', 'private'], default: 'private' },
     questionCount: { type: Number, default: 10, min: 3, max: 30 },
     timePerQuestion: { type: Number, default: 15, min: 5, max: 60 },
     status: { type: String, enum: ['lobby', 'playing', 'ended'], default: 'lobby' },
